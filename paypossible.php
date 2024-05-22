@@ -16,8 +16,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-// Make sure WooCommerce is active.
-if ( ! in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ) ) ) {
+/**
+ *  Make sure WooCommerce is active.
+ *
+ *  @since 4.0
+ */
+if ( ! in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ), true ) ) {
 	return;
 }
 
@@ -129,7 +133,7 @@ function init_paypossible_gateway() {
 			$shipping_total = $order->get_shipping_total();
 			$tax_total      = $order->get_total_tax();
 
-			$request_data = json_encode(
+			$request_data = wp_json_encode(
 				array(
 					'discount'     => $discount_total,
 					'items'        => $cart_items,
@@ -138,7 +142,6 @@ function init_paypossible_gateway() {
 					'tax'          => $tax_total,
 				)
 			);
-			var_dump( $request_body );
 
 			$response = wp_remote_post(
 				'https://' . $this->domain . '/api/v1/carts/',
@@ -151,7 +154,7 @@ function init_paypossible_gateway() {
 			);
 
 			if ( is_wp_error( $response ) ) {
-				wc_add_notice( __( 'There was an error transferring cart. Please try again.', 'error', 'paypossible' ) );
+				wc_add_notice( __( 'There was an error transferring cart. Please try again.', 'paypossible' ), 'error' );
 				return array(
 					'result'   => 'failure',
 					'redirect' => '',
@@ -159,7 +162,6 @@ function init_paypossible_gateway() {
 			}
 
 			$response_body = wp_remote_retrieve_body( $response );
-			var_dump( $response_body );
 			$response_data = json_decode( $response_body, true );
 				$cart_url  = $response_data['url'];
 
@@ -178,16 +180,16 @@ function init_paypossible_gateway() {
 				);
 				$merchant_url = 'https://' . $this->domain . '/api/v1/merchants/' . $this->merchant_id . '/';
 
-				$request_data = json_encode(
+				$request_data = wp_json_encode(
 					array(
-						'address'    => $address,
-						'cart'       => array( 'url' => $cart_url ),
-						'ip_address' => $order->get_customer_ip_address(),
-						'merchant'   => array( 'url' => $merchant_url ),
-						'personal'   => $personal,
+						'address'      => $address,
+						'callback_url' => home_url( '/wc-api/paypossible' ),
+						'cart'         => array( 'url' => $cart_url ),
+						'ip_address'   => $order->get_customer_ip_address(),
+						'merchant'     => array( 'url' => $merchant_url ),
+						'personal'     => $personal,
 					)
 				);
-				var_dump( $request_data );
 
 				$response = wp_remote_post(
 					'https://' . $this->domain . '/api/v1/leads/',
@@ -201,20 +203,18 @@ function init_paypossible_gateway() {
 				);
 
 			if ( is_wp_error( $response ) ) {
-				wc_add_notice( __( 'There was an error starting applicationt. Please try again.', 'error', 'paypossible' ) );
+				wc_add_notice( __( 'There was an error starting applicationt. Please try again.', 'paypossible' ), 'error' );
 				return array(
 					'result'   => 'failure',
 					'redirect' => '',
 				);
 			}
 
-				$response_body = wp_remote_retrieve_body( $response );
-				var_dump( $response_body );
+				$response_body     = wp_remote_retrieve_body( $response );
 					$response_data = json_decode( $response_body, true );
 					$app_url       = $response_data['app_url'];
 
 			$order->update_status( 'on-hold', __( 'Awaiting customer application.', 'paypossible' ) );
-			// $order->reduce_order_stock();
 			WC()->cart->empty_cart();
 
 			return array(
@@ -227,7 +227,12 @@ function init_paypossible_gateway() {
 		 * Payment complete webhook
 		 */
 		public function webhook() {
-			$order = wc_get_order( $_GET['id'] );
+			if ( ! isset( $_POST['id'] ) ) {
+				return;
+			}
+
+			$order_id = $_POST['id'];
+			$order    = wc_get_order( $order_id );
 			$order->payment_complete();
 			$order->reduce_order_stock();
 			update_option( 'webhook_debug', $_GET );
