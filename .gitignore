@@ -1,25 +1,45 @@
-# CakePHP 3
+# Editors
+project.xml
+project.properties
+/nbproject/private/
+.buildpath
+.project
+.settings*
+sftp-config.json
+.idea
+._*
 
-/vendor/*
-/config/app.php
+# Grunt
+/node_modules/
+/deploy/
+package-lock.json
 
-/tmp/cache/models/*
-!/tmp/cache/models/empty
-/tmp/cache/persistent/*
-!/tmp/cache/persistent/empty
-/tmp/cache/views/*
-!/tmp/cache/views/empty
-/tmp/sessions/*
-!/tmp/sessions/empty
-/tmp/tests/*
-!/tmp/tests/empty
+# Composer
+/vendor/
+composer.lock
 
-/logs/*
-!/logs/empty
+# Sass
+.sass-cache/
 
-# CakePHP 2
+# OS X metadata
+.DS_Store
 
-/app/tmp/*
-/app/Config/core.php
-/app/Config/database.php
-/vendors/*
+# Windows junk
+Thumbs.db
+
+# ApiGen
+/wc-apidocs/
+
+# Tests (Unit and E2E)
+/tmp
+/tests/coverage/
+/tests/_output/*
+!/tests/_output/.gitkeep
+
+# Logs
+/logs
+
+# Build assets.
+select2.scss
+/assets/
+/languages/
