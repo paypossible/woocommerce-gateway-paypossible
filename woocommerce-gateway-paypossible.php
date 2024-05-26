@@ -3,6 +3,7 @@
  * WC PayPossible Class
  *
  * @package  WooCommerce PayPossible Gateway
+ *
  * Plugin Name: WooCommerce PayPossible Gateway
  * Plugin URI: https://github.com/paypossible/woocommerce-gateway-paypossible
  * Description: WooCommerce payment gateway for PayPossible.
@@ -10,22 +11,18 @@
  * Author: PayPossible, Inc.
  * Author URI: https://paypossible.com
  * Requires Plugins: woocommerce
- * Text Domain: woocommece-gateway-paypossible
+ * Text Domain: woocommerce-gateway-paypossible
+ * Domain Path: /i18n/languages/
+ * Requires at least: 4.2
+ * Tested up to: 4.9
+ * Copyright: © 2024 PayPossible, Inc.
+ * License: MIT
  */
 
 // phpcs:disable WordPress.Files.FileName
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
-}
-
-/**
- *  Make sure WooCommerce is active.
- *
- *  @since 4.0
- */
-if ( ! in_array( 'woocommerce/woocommerce.php', apply_filters( 'active_plugins', get_option( 'active_plugins' ) ), true ) ) {
-	return;
 }
 
 /**
