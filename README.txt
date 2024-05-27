@@ -2,17 +2,17 @@
 
 Contributors: PayPossible, Inc.
 
-Tags: woocommerce, payment, paypossible
+Tags: woocommerce, payment, paypossible, financing, leasing
 
 Requires at least: 4.0
 
 Tested up to: 5.8
 
-Stable tag: 1.0
+Stable tag: 1.0.0
 
 License: MIT
 
-License URI: http://www.gnu.org/licenses/gpl-2.0.html
+License URI: https://github.com/paypossible/woocommerce-gateway-paypossible/blob/main/LICENSE
 
 Integrate PayPossible into your WooCommerce store.
 
@@ -22,7 +22,7 @@ This plugin allows you to integrate PayPossible payment options into your WooCom
 
 == Installation ==
 
-1. Upload the `paypossible` folder to the `/wp-content/plugins/` directory
+1. Upload the `woocommerce-gateway-paypossible` folder to the `/wp-content/plugins/` directory
 2. Activate the plugin through the 'Plugins' menu in WordPress
 3. Go to WooCommerce settings and configure the PayPossible options
 
@@ -34,10 +34,10 @@ After installing and activating the plugin, go to WooCommerce settings and enter
 
 == Changelog ==
 
-= 1.0 =
+= 1.0.0 =
 * Initial release
 
 == Upgrade Notice ==
 
-= 1.0 =
+= 1.0.0 =
 Initial release of the PayPossible WooCommerce plugin.

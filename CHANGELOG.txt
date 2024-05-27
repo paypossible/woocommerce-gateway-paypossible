@@ -1,0 +1,4 @@
+*** WooCommerce PayPossible Gateway Changelog ***
+
+2024-05-27 - version 1.0.0
+* Initial release
