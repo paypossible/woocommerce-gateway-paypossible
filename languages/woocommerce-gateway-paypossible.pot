@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2024-05-26T19:34:02+00:00\n"
+"POT-Creation-Date: 2024-05-27T23:32:46+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.10.0\n"
 "X-Domain: woocommerce-gateway-paypossible\n"
@@ -39,14 +39,84 @@ msgstr ""
 msgid "https://paypossible.com"
 msgstr ""
 
-#: includes/class-wc-gateway-paypossible.php:155
+#: includes/class-wc-gateway-paypossible.php:47
+msgid "Offer customers payment options at checkout, including financing and leasing."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:79
+msgid "Title"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:81
+msgid "This controls the title which the user sees during checkout."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:82
+msgid "Check My Payment Options (Financing, Leasing)"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:86
+msgid "Description"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:88
+msgid "This controls the description which the user sees during checkout."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:89
+msgid "Checking your eligibility will not affect your credit."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:93
+msgid "Order Button Text"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:95
+msgid "This controls the order button label which the user sees during checkout."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:96
+msgid "Check Eligibility"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:100
+msgid "Test Mode"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:102
+msgid "Enable Test Mode"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:103
+msgid "Place payment gateway in test mode."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:108
+msgid "Merchant ID"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:110
+msgid "Your PayPossible Merchant ID."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:114
+msgid "API Token"
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:116
+msgid "Your PayPossible API token."
+msgstr ""
+
+#: includes/class-wc-gateway-paypossible.php:166
+#: includes/class-wc-gateway-paypossible.php:174
 msgid "There was an error transferring cart. Please try again."
 msgstr ""
 
-#: includes/class-wc-gateway-paypossible.php:201
+#: includes/class-wc-gateway-paypossible.php:223
+#: includes/class-wc-gateway-paypossible.php:231
 msgid "There was an error starting applicationt. Please try again."
 msgstr ""
 
-#: includes/class-wc-gateway-paypossible.php:209
+#: includes/class-wc-gateway-paypossible.php:238
 msgid "Awaiting customer application."
 msgstr ""

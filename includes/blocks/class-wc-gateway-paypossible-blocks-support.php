@@ -83,9 +83,10 @@ final class WC_Gateway_PayPossible_Blocks_Support extends AbstractPaymentMethodT
 	 */
 	public function get_payment_method_data() {
 		return array(
-			'title'       => $this->get_setting( 'title' ),
-			'description' => $this->get_setting( 'description' ),
-			'supports'    => array_filter( $this->gateway->supports, array( $this->gateway, 'supports' ) ),
+			'title'             => $this->get_setting( 'title' ),
+			'description'       => $this->get_setting( 'description' ),
+			'order_button_text' => $this->get_setting( 'order_button_text' ),
+			'supports'          => array_filter( $this->gateway->supports, array( $this->gateway, 'supports' ) ),
 		);
 	}
 }
