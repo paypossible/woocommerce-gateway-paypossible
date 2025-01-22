@@ -276,7 +276,7 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	 * @param string $nonce The nonce.
 	 */
 	public function get_callback_url( $order_id, $nonce ) {
-		returnadd_query_arg(
+		return add_query_arg(
 			array(
 				'nonce'    => $nonce,
 				'order_id' => $order_id,
