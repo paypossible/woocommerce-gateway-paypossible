@@ -251,22 +251,30 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	 * Payment complete callback
 	 */
 	public function callback() {
-		header( 'HTTP/1.1 200 OK' );
-
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended
 		$nonce    = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : null;
 		$order_id = isset( $_GET['order_id'] ) ? sanitize_text_field( wp_unslash( $_GET['order_id'] ) ) : null;
 
-		if ( is_null( $nonce ) || is_null( $order_id ) ) {
+		if ( is_null( $nonce ) ) {
+			wp_send_json( array( 'error' => 'Missing nonce' ), 400 );
+			return;
+		}
+
+		if ( is_null( $order_id ) ) {
+			wp_send_json( array( 'error' => 'Missing order ID' ), 400 );
 			return;
 		}
 
 		if ( wc_get_order_item_meta( $order_id, 'callback_nonce' ) !== $nonce ) {
+			wp_send_json( array( 'error' => 'Nonce does not match order ID' ), 400 );
 			return;
 		}
 
-			$order = wc_get_order( $order_id );
+		$order = wc_get_order( $order_id );
 		$order->payment_complete();
+		wc_reduce_stock_levels( $order );
+		wp_send_json( array( 'success' => true ), 200 );
+		return;
 	}
 
 	/**
