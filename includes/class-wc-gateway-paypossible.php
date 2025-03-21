@@ -235,7 +235,7 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		$app_url = $response_data['app_url'];
 		$lead_id = $response_data['id'];
 
-		$order->update_status( 'on-hold', __( 'Awaiting customer application.', 'woocommerce-gateway-paypossible' ) );
+		$order->update_status( 'pending', __( 'Awaiting customer application.', 'woocommerce-gateway-paypossible' ) );
 		WC()->cart->empty_cart();
 
 		wc_add_order_item_meta( $order_id, 'callback_nonce', $nonce );
