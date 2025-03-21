@@ -274,7 +274,6 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		$order->payment_complete();
 		wc_reduce_stock_levels( $order );
 		wp_send_json( array( 'success' => true ), 200 );
-		return;
 	}
 
 	/**
