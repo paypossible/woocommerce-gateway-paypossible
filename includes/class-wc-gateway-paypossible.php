@@ -67,6 +67,9 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		add_action( 'woocommerce_fulfillment_after_fulfill', array( $this, 'notify_shipped_from_fulfillment' ), 10, 1 );
 		add_action( 'woocommerce_order_refunded', array( $this, 'notify_refunded' ), 10, 2 );
 		add_action( 'woocommerce_order_status_cancelled', array( $this, 'notify_cancelled' ), 10, 1 );
+
+		add_action( 'woocommerce_thankyou', array( $this, 'empty_cart_on_thankyou' ), 10, 1 );
+		add_filter( 'woocommerce_thankyou_order_received_text', array( $this, 'thankyou_retry_link' ), 10, 2 );
 	}
 
 	/**
@@ -244,7 +247,6 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		$order->update_meta_data( '_paypossible_callback_nonce', $nonce );
 		$order->update_meta_data( '_paypossible_lead_id', $lead_id );
 		$order->update_status( 'pending', __( 'Awaiting customer application.', 'woocommerce-gateway-paypossible' ) );
-		WC()->cart->empty_cart();
 
 		return array(
 			'result'   => 'success',
@@ -285,27 +287,46 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			return;
 		}
 
-		if ( 'order' !== $event['type'] ) {
+		$type   = (string) $event['type'];
+		$obj_id = (string) $event['id'];
+		$status = (string) $event['status'];
+
+		$key  = $type . ':' . $obj_id . ':' . $status;
+		$seen = json_decode( (string) $order->get_meta( '_paypossible_seen_events' ), true );
+		if ( ! is_array( $seen ) ) {
+			$seen = array();
+		}
+		if ( in_array( $key, $seen, true ) ) {
 			wp_send_json(
 				array(
-					'success' => true,
-					'ignored' => true,
+					'success'   => true,
+					'duplicate' => true,
 				),
 				200
 			);
 			return;
 		}
+		$seen[] = $key;
+		$order->update_meta_data( '_paypossible_seen_events', wp_json_encode( $seen ) );
 
-		$this->handle_order_event( $order, (string) $event['id'], (string) $event['status'] );
+		$order->add_order_note( sprintf( 'PayPossible %s %s: %s', $type, $obj_id, $status ) );
+
+		if ( 'order' === $type ) {
+			$this->handle_order_event( $order, $obj_id, $status );
+		} elseif ( 'lead' === $type ) {
+			$this->handle_lead_event( $order, $obj_id, $status );
+		}
+
+		$order->save();
 		wp_send_json( array( 'success' => true ), 200 );
 	}
 
 	/**
 	 * Apply a PayPossible order-type event to a WooCommerce order.
 	 *
-	 * Idempotent: repeated deliveries of the same status are ignored. WC's
-	 * own status transitions handle stock reduction and date_paid; this
-	 * method never touches stock directly.
+	 * Transition-only. The callback wrapper owns dedupe and informational
+	 * order notes; WC handles stock reduction on the resulting status
+	 * transitions so we never touch stock directly.
 	 *
 	 * @param WC_Order $order       The WooCommerce order.
 	 * @param string   $pp_order_id The PayPossible order id from the event.
@@ -316,53 +337,96 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			$order->update_meta_data( '_paypossible_order_id', $pp_order_id );
 		}
 
-		if ( $pp_status === (string) $order->get_meta( '_paypossible_last_order_status' ) ) {
-			return;
-		}
-		$order->update_meta_data( '_paypossible_last_order_status', $pp_status );
-
-		$note = sprintf( 'PayPossible order %s: %s', $pp_order_id, $pp_status );
-
 		switch ( $pp_status ) {
-			case 'pending':
-			case 'sent':
-			case 'approving':
-			case 'processing':
-			case 'paid':
-			case 'shipped':
-			case 'cancelling':
-			case 'refunding':
-				$order->add_order_note( $note );
-				$order->save();
-				break;
-
 			case 'approved':
-				$order->add_order_note( $note );
 				$order->payment_complete( $pp_order_id );
 				break;
 
 			case 'cancelled':
-				$order->add_order_note( $note );
 				if ( ! $order->has_status( array( 'cancelled', 'refunded' ) ) ) {
-					$order->update_status( 'cancelled', $note );
-				} else {
-					$order->save();
+					$order->update_status( 'cancelled' );
 				}
 				break;
 
 			case 'refunded':
-				$order->add_order_note( $note );
 				if ( ! $order->has_status( 'refunded' ) ) {
-					$order->update_status( 'refunded', $note );
-				} else {
-					$order->save();
+					$order->update_status( 'refunded' );
+				}
+				break;
+		}
+	}
+
+	/**
+	 * Apply a PayPossible lead-type event to a WooCommerce order.
+	 *
+	 * Transition-only. The callback wrapper owns dedupe and informational
+	 * order notes. Only terminal lead statuses (declined, expired) affect
+	 * WC state — all other lead statuses are driven by the corresponding
+	 * order-type events elsewhere in the lifecycle.
+	 *
+	 * @param WC_Order $order       The WooCommerce order.
+	 * @param string   $lead_id     The PayPossible lead id from the event.
+	 * @param string   $lead_status The PayPossible lead status from the event.
+	 */
+	private function handle_lead_event( $order, $lead_id, $lead_status ) {
+		switch ( $lead_status ) {
+			case 'declined':
+				if ( ! $order->has_status( array( 'failed', 'cancelled', 'refunded' ) ) ) {
+					$order->update_status( 'failed' );
 				}
 				break;
 
-			default:
-				$order->add_order_note( sprintf( 'PayPossible order %s: unknown status "%s"', $pp_order_id, $pp_status ) );
-				$order->save();
+			case 'expired':
+				if ( ! $order->has_status( array( 'failed', 'cancelled', 'refunded' ) ) ) {
+					$order->update_status( 'cancelled' );
+				}
+				break;
 		}
+	}
+
+	/**
+	 * Empty the customer's cart when they land on the thank-you page for a
+	 * successful PayPossible order. Runs at most once per order.
+	 *
+	 * @param int $order_id The WooCommerce order id.
+	 */
+	public function empty_cart_on_thankyou( $order_id ) {
+		if ( ! $order_id ) {
+			return;
+		}
+		$order = wc_get_order( $order_id );
+		if ( ! $order || 'paypossible' !== $order->get_payment_method() ) {
+			return;
+		}
+		if ( 'yes' === (string) $order->get_meta( '_paypossible_cart_cleared' ) ) {
+			return;
+		}
+		if ( $order->has_status( array( 'failed', 'cancelled' ) ) ) {
+			return;
+		}
+		if ( WC()->cart ) {
+			WC()->cart->empty_cart();
+		}
+		$order->update_meta_data( '_paypossible_cart_cleared', 'yes' );
+		$order->save();
+	}
+
+	/**
+	 * Append a "Try a different payment method" link to the thank-you page
+	 * text for failed PayPossible orders. Points at the WC order-pay endpoint
+	 * so the customer can retry the same order with another gateway.
+	 *
+	 * @param string        $text  The existing thank-you text.
+	 * @param WC_Order|null $order The order shown on the thank-you page.
+	 * @return string
+	 */
+	public function thankyou_retry_link( $text, $order ) {
+		if ( ! $order || 'paypossible' !== $order->get_payment_method() || ! $order->has_status( 'failed' ) ) {
+			return $text;
+		}
+		$retry_url = $order->get_checkout_payment_url();
+		$label     = esc_html__( 'Try a different payment method', 'woocommerce-gateway-paypossible' );
+		return $text . ' <a class="button" href="' . esc_url( $retry_url ) . '">' . $label . '</a>';
 	}
 
 	/**
