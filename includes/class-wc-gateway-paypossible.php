@@ -62,6 +62,11 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 		add_action( 'woocommerce_api_paypossible', array( $this, 'callback' ) );
+
+		add_action( 'woocommerce_order_status_completed', array( $this, 'notify_shipped' ), 10, 1 );
+		add_action( 'woocommerce_fulfillment_after_fulfill', array( $this, 'notify_shipped_from_fulfillment' ), 10, 1 );
+		add_action( 'woocommerce_order_refunded', array( $this, 'notify_refunded' ), 10, 2 );
+		add_action( 'woocommerce_order_status_cancelled', array( $this, 'notify_cancelled' ), 10, 1 );
 	}
 
 	/**
@@ -185,7 +190,7 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			'zip'     => $order->get_billing_postcode(),
 		);
 		$merchant_url = 'https://' . $this->domain . '/api/v1/merchants/' . $this->merchant_id . '/';
-		$nonce        = substr( str_shuffle( MD5( microtime() ) ), 0, 12 );
+		$nonce        = bin2hex( random_bytes( 16 ) );
 		$personal     = array(
 			'first_name' => $order->get_billing_first_name(),
 			'last_name'  => $order->get_billing_last_name(),
@@ -220,15 +225,15 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			wc_add_notice( __( 'There was an error starting applicationt. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
+			wc_add_notice( __( 'There was an error starting application. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
 			return;
 		}
 
-		$response_body     = wp_remote_retrieve_body( $response );
-			$response_data = json_decode( $response_body, true );
+		$response_body = wp_remote_retrieve_body( $response );
+		$response_data = json_decode( $response_body, true );
 
 		if ( ! isset( $response_data['app_url'] ) ) {
-			wc_add_notice( __( 'There was an error starting applicationt. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
+			wc_add_notice( __( 'There was an error starting application. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
 			return;
 		}
 
@@ -247,33 +252,226 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	}
 
 	/**
-	 * Payment complete callback
+	 * Webhook receiver for PayPossible lifecycle events.
+	 *
+	 * PayPossible POSTs a JSON body of the form { id, type, status } to the
+	 * callback URL we handed it in process_payment(), which carries the
+	 * per-order nonce and WooCommerce order id as query args.
 	 */
 	public function callback() {
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended
-		$nonce    = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['nonce'] ) ) : null;
-		$order_id = isset( $_GET['order_id'] ) ? sanitize_text_field( wp_unslash( $_GET['order_id'] ) ) : null;
+		$order_id = isset( $_GET['order_id'] ) ? absint( $_GET['order_id'] ) : 0;
+		$nonce    = isset( $_GET['nonce'] ) ? sanitize_text_field( wp_unslash( $_GET['nonce'] ) ) : '';
 
-		if ( is_null( $nonce ) ) {
-			wp_send_json( array( 'error' => 'Missing nonce' ), 400 );
+		if ( ! $order_id || '' === $nonce ) {
+			wp_send_json( array( 'error' => 'Missing order_id or nonce' ), 400 );
 			return;
 		}
 
-		if ( is_null( $order_id ) ) {
-			wp_send_json( array( 'error' => 'Missing order ID' ), 400 );
-			return;
-		}
+		$order        = wc_get_order( $order_id );
+		$stored_nonce = $order ? (string) $order->get_meta( '_paypossible_callback_nonce' ) : '';
 
-		$order = wc_get_order( $order_id );
-
-		if ( ! $order || $order->get_meta( '_paypossible_callback_nonce' ) !== $nonce ) {
+		if ( ! $order || '' === $stored_nonce || ! hash_equals( $stored_nonce, $nonce ) ) {
 			wp_send_json( array( 'error' => 'Nonce does not match order ID' ), 400 );
 			return;
 		}
 
-		$order->payment_complete();
-		wc_reduce_stock_levels( $order );
+		$raw   = file_get_contents( 'php://input' );
+		$event = json_decode( $raw, true );
+
+		if ( ! is_array( $event ) || empty( $event['type'] ) || empty( $event['status'] ) || empty( $event['id'] ) ) {
+			wp_send_json( array( 'error' => 'Invalid event payload' ), 400 );
+			return;
+		}
+
+		if ( 'order' !== $event['type'] ) {
+			wp_send_json(
+				array(
+					'success' => true,
+					'ignored' => true,
+				),
+				200
+			);
+			return;
+		}
+
+		$this->handle_order_event( $order, (string) $event['id'], (string) $event['status'] );
 		wp_send_json( array( 'success' => true ), 200 );
+	}
+
+	/**
+	 * Apply a PayPossible order-type event to a WooCommerce order.
+	 *
+	 * Idempotent: repeated deliveries of the same status are ignored. WC's
+	 * own status transitions handle stock reduction and date_paid; this
+	 * method never touches stock directly.
+	 *
+	 * @param WC_Order $order       The WooCommerce order.
+	 * @param string   $pp_order_id The PayPossible order id from the event.
+	 * @param string   $pp_status   The PayPossible status from the event.
+	 */
+	private function handle_order_event( $order, $pp_order_id, $pp_status ) {
+		if ( '' === (string) $order->get_meta( '_paypossible_order_id' ) ) {
+			$order->update_meta_data( '_paypossible_order_id', $pp_order_id );
+		}
+
+		if ( $pp_status === (string) $order->get_meta( '_paypossible_last_order_status' ) ) {
+			return;
+		}
+		$order->update_meta_data( '_paypossible_last_order_status', $pp_status );
+
+		$note = sprintf( 'PayPossible order %s: %s', $pp_order_id, $pp_status );
+
+		switch ( $pp_status ) {
+			case 'pending':
+			case 'sent':
+			case 'approving':
+			case 'processing':
+			case 'paid':
+			case 'shipped':
+			case 'cancelling':
+			case 'refunding':
+				$order->add_order_note( $note );
+				$order->save();
+				break;
+
+			case 'approved':
+				$order->add_order_note( $note );
+				$order->payment_complete( $pp_order_id );
+				break;
+
+			case 'cancelled':
+				$order->add_order_note( $note );
+				if ( ! $order->has_status( array( 'cancelled', 'refunded' ) ) ) {
+					$order->update_status( 'cancelled', $note );
+				} else {
+					$order->save();
+				}
+				break;
+
+			case 'refunded':
+				$order->add_order_note( $note );
+				if ( ! $order->has_status( 'refunded' ) ) {
+					$order->update_status( 'refunded', $note );
+				} else {
+					$order->save();
+				}
+				break;
+
+			default:
+				$order->add_order_note( sprintf( 'PayPossible order %s: unknown status "%s"', $pp_order_id, $pp_status ) );
+				$order->save();
+		}
+	}
+
+	/**
+	 * Notify PayPossible that the merchant marked the order fulfilled.
+	 *
+	 * @param int $order_id The WooCommerce order id.
+	 */
+	public function notify_shipped( $order_id ) {
+		$this->notify_lifecycle( $order_id, 'ship', '_paypossible_shipped_notified' );
+	}
+
+	/**
+	 * Bridge from the WC Fulfillments API (woocommerce_fulfillment_after_fulfill)
+	 * to notify_shipped(). Only entity_type=order fulfillments have an order id.
+	 *
+	 * @param mixed $fulfillment Fulfillment object.
+	 */
+	public function notify_shipped_from_fulfillment( $fulfillment ) {
+		if ( ! is_object( $fulfillment ) ) {
+			return;
+		}
+		if ( method_exists( $fulfillment, 'get_entity_type' ) && 'order' !== $fulfillment->get_entity_type() ) {
+			return;
+		}
+		$order_id = method_exists( $fulfillment, 'get_entity_id' ) ? (int) $fulfillment->get_entity_id() : 0;
+		if ( $order_id ) {
+			$this->notify_shipped( $order_id );
+		}
+	}
+
+	/**
+	 * Notify PayPossible that the WooCommerce order was refunded.
+	 *
+	 * @param int $order_id  The WooCommerce order id.
+	 * @param int $refund_id The refund id (unused).
+	 */
+	public function notify_refunded( $order_id, $refund_id ) {
+		$this->notify_lifecycle( $order_id, 'refund', '_paypossible_refunded_notified' );
+	}
+
+	/**
+	 * Notify PayPossible that the WooCommerce order was cancelled.
+	 *
+	 * @param int $order_id The WooCommerce order id.
+	 */
+	public function notify_cancelled( $order_id ) {
+		$this->notify_lifecycle( $order_id, 'cancel', '_paypossible_cancelled_notified' );
+	}
+
+	/**
+	 * Common outbound lifecycle notification.
+	 *
+	 * @param int    $order_id The WooCommerce order id.
+	 * @param string $action   'ship', 'refund', or 'cancel'.
+	 * @param string $flag_key Order meta key that guards against duplicate sends.
+	 */
+	private function notify_lifecycle( $order_id, $action, $flag_key ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order || 'paypossible' !== $order->get_payment_method() ) {
+			return;
+		}
+		if ( 'yes' === (string) $order->get_meta( $flag_key ) ) {
+			return;
+		}
+
+		$pp_order_id = (string) $order->get_meta( '_paypossible_order_id' );
+		if ( '' === $pp_order_id ) {
+			$order->add_order_note( sprintf( 'PayPossible %s: skipped, no PayPossible order id yet.', $action ) );
+			$order->save();
+			return;
+		}
+
+		$response = $this->send_paypossible_request( '/api/v1/orders/' . rawurlencode( $pp_order_id ) . '/' . $action . '/' );
+
+		if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) >= 300 ) {
+			$order->add_order_note( sprintf(
+				'PayPossible %s notification failed: %s',
+				$action,
+				is_wp_error( $response ) ? $response->get_error_message() : wp_remote_retrieve_response_code( $response )
+			) );
+			$order->save();
+			return;
+		}
+
+		$order->update_meta_data( $flag_key, 'yes' );
+		$order->add_order_note( sprintf( 'PayPossible %s notification sent.', $action ) );
+		$order->save();
+	}
+
+	/**
+	 * POST to a PayPossible API endpoint with Token auth.
+	 *
+	 * @param string     $path   The path beginning with a leading slash.
+	 * @param array|null $body   Optional JSON body.
+	 * @param string     $method HTTP method.
+	 * @return array|WP_Error
+	 */
+	private function send_paypossible_request( $path, $body = null, $method = 'POST' ) {
+		$args = array(
+			'method'  => $method,
+			'headers' => array(
+				'Content-Type'  => 'application/json',
+				'Authorization' => 'Token ' . $this->token,
+			),
+			'timeout' => 10,
+		);
+		if ( null !== $body ) {
+			$args['body'] = wp_json_encode( $body );
+		}
+		return wp_remote_request( 'https://' . $this->domain . $path, $args );
 	}
 
 	/**
