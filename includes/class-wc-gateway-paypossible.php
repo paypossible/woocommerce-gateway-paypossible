@@ -235,11 +235,10 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		$app_url = $response_data['app_url'];
 		$lead_id = $response_data['id'];
 
+		$order->update_meta_data( '_paypossible_callback_nonce', $nonce );
+		$order->update_meta_data( '_paypossible_lead_id', $lead_id );
 		$order->update_status( 'pending', __( 'Awaiting customer application.', 'woocommerce-gateway-paypossible' ) );
 		WC()->cart->empty_cart();
-
-		wc_add_order_item_meta( $order_id, 'callback_nonce', $nonce );
-		wc_add_order_item_meta( $order_id, 'lead_id', $lead_id );
 
 		return array(
 			'result'   => 'success',
@@ -265,12 +264,13 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			return;
 		}
 
-		if ( wc_get_order_item_meta( $order_id, 'callback_nonce' ) !== $nonce ) {
+		$order = wc_get_order( $order_id );
+
+		if ( ! $order || $order->get_meta( '_paypossible_callback_nonce' ) !== $nonce ) {
 			wp_send_json( array( 'error' => 'Nonce does not match order ID' ), 400 );
 			return;
 		}
 
-		$order = wc_get_order( $order_id );
 		$order->payment_complete();
 		wc_reduce_stock_levels( $order );
 		wp_send_json( array( 'success' => true ), 200 );
