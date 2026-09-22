@@ -46,7 +46,7 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		$this->method_title       = 'PayPossible';
 		$this->method_description = __( 'Offer customers payment options at checkout, including financing and leasing.', 'woocommerce-gateway-paypossible' );
 		$this->has_fields         = false;
-		$this->supports           = array( 'products' );
+		$this->supports           = array( 'products', 'refunds' );
 
 		$this->init_form_fields();
 		$this->init_settings();
@@ -70,6 +70,11 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 
 		add_action( 'woocommerce_thankyou', array( $this, 'empty_cart_on_thankyou' ), 10, 1 );
 		add_filter( 'woocommerce_thankyou_order_received_text', array( $this, 'thankyou_retry_link' ), 10, 2 );
+
+		add_filter( 'woocommerce_order_actions', array( $this, 'add_order_actions' ) );
+		add_action( 'woocommerce_order_action_paypossible_notify_shipped', array( $this, 'run_notify_shipped_action' ) );
+		add_action( 'woocommerce_order_action_paypossible_notify_cancelled', array( $this, 'run_notify_cancelled_action' ) );
+		add_action( 'admin_notices', array( $this, 'render_admin_notice' ) );
 	}
 
 	/**
@@ -433,9 +438,10 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	 * Notify PayPossible that the merchant marked the order fulfilled.
 	 *
 	 * @param int $order_id The WooCommerce order id.
+	 * @return true|WP_Error
 	 */
 	public function notify_shipped( $order_id ) {
-		$this->notify_lifecycle( $order_id, 'ship', '_paypossible_shipped_notified' );
+		return $this->notify_lifecycle( $order_id, 'ship', '_paypossible_shipped_notified' );
 	}
 
 	/**
@@ -462,58 +468,233 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	 *
 	 * @param int $order_id  The WooCommerce order id.
 	 * @param int $refund_id The refund id (unused).
+	 * @return true|WP_Error
 	 */
 	public function notify_refunded( $order_id, $refund_id ) {
-		$this->notify_lifecycle( $order_id, 'refund', '_paypossible_refunded_notified' );
+		return $this->notify_lifecycle( $order_id, 'refund', '_paypossible_refunded_notified' );
 	}
 
 	/**
 	 * Notify PayPossible that the WooCommerce order was cancelled.
 	 *
 	 * @param int $order_id The WooCommerce order id.
+	 * @return true|WP_Error
 	 */
 	public function notify_cancelled( $order_id ) {
-		$this->notify_lifecycle( $order_id, 'cancel', '_paypossible_cancelled_notified' );
+		return $this->notify_lifecycle( $order_id, 'cancel', '_paypossible_cancelled_notified' );
 	}
 
 	/**
-	 * Common outbound lifecycle notification.
+	 * WC Payment Gateway refund entry point. Fires when the merchant clicks
+	 * "Refund via PayPossible" in the WC refund modal. Returns WP_Error to
+	 * veto the WC-side refund record on any failure.
+	 *
+	 * @param int    $order_id WooCommerce order id.
+	 * @param float  $amount   Refund amount (unused in the bare POST body).
+	 * @param string $reason   Merchant-provided reason (unused in the bare POST body).
+	 * @return bool|WP_Error
+	 */
+	public function process_refund( $order_id, $amount = null, $reason = '' ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return new WP_Error( 'invalid_order', __( 'Invalid order.', 'woocommerce-gateway-paypossible' ) );
+		}
+		if ( 'paypossible' !== $order->get_payment_method() ) {
+			return new WP_Error( 'wrong_gateway', __( 'This order was not paid via PayPossible.', 'woocommerce-gateway-paypossible' ) );
+		}
+		return $this->notify_lifecycle( $order_id, 'refund', '_paypossible_refunded_notified' );
+	}
+
+	/**
+	 * Common outbound lifecycle notification. Checks PayPossible's remote
+	 * order status before POSTing so we no-op when the action is already
+	 * complete on their side.
 	 *
 	 * @param int    $order_id The WooCommerce order id.
 	 * @param string $action   'ship', 'refund', or 'cancel'.
 	 * @param string $flag_key Order meta key that guards against duplicate sends.
+	 * @return true|WP_Error
 	 */
 	private function notify_lifecycle( $order_id, $action, $flag_key ) {
 		$order = wc_get_order( $order_id );
 		if ( ! $order || 'paypossible' !== $order->get_payment_method() ) {
-			return;
+			return true;
 		}
 		if ( 'yes' === (string) $order->get_meta( $flag_key ) ) {
-			return;
+			return true;
 		}
 
 		$pp_order_id = (string) $order->get_meta( '_paypossible_order_id' );
 		if ( '' === $pp_order_id ) {
 			$order->add_order_note( sprintf( 'PayPossible %s: skipped, no PayPossible order id yet.', $action ) );
 			$order->save();
-			return;
+			return new WP_Error( 'no_paypossible_order', __( 'No PayPossible order id on this order yet.', 'woocommerce-gateway-paypossible' ) );
+		}
+
+		$terminal_statuses = array(
+			'ship'   => array( 'shipped' ),
+			'cancel' => array( 'cancelling', 'cancelled' ),
+			'refund' => array( 'refunding', 'refunded' ),
+		);
+
+		$current = $this->get_paypossible_order_status( $pp_order_id );
+		if ( null === $current ) {
+			$order->add_order_note( sprintf( 'PayPossible %s: could not read remote order status; will retry.', $action ) );
+			$order->save();
+			return new WP_Error( 'status_lookup_failed', __( 'Could not read PayPossible order status.', 'woocommerce-gateway-paypossible' ) );
+		}
+
+		if ( in_array( $current, $terminal_statuses[ $action ], true ) ) {
+			$order->update_meta_data( $flag_key, 'yes' );
+			$order->add_order_note( sprintf( 'PayPossible %s: already %s remotely; skipping.', $action, $current ) );
+			$order->save();
+			return true;
 		}
 
 		$response = $this->send_paypossible_request( '/api/v1/orders/' . rawurlencode( $pp_order_id ) . '/' . $action . '/' );
-
 		if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) >= 300 ) {
-			$order->add_order_note( sprintf(
-				'PayPossible %s notification failed: %s',
-				$action,
-				is_wp_error( $response ) ? $response->get_error_message() : wp_remote_retrieve_response_code( $response )
-			) );
+			$error_msg = is_wp_error( $response ) ? $response->get_error_message() : (string) wp_remote_retrieve_response_code( $response );
+			$order->add_order_note( sprintf( 'PayPossible %s notification failed: %s', $action, $error_msg ) );
 			$order->save();
-			return;
+			return new WP_Error( 'paypossible_' . $action . '_failed', $error_msg );
 		}
 
 		$order->update_meta_data( $flag_key, 'yes' );
 		$order->add_order_note( sprintf( 'PayPossible %s notification sent.', $action ) );
 		$order->save();
+		return true;
+	}
+
+	/**
+	 * GET the current PayPossible order status.
+	 *
+	 * @param string $pp_order_id The PayPossible order id.
+	 * @return string|null Status string on success, null if the call failed or
+	 *                     the response was missing a status field.
+	 */
+	private function get_paypossible_order_status( $pp_order_id ) {
+		$response = $this->send_paypossible_request(
+			'/api/v1/orders/' . rawurlencode( $pp_order_id ) . '/',
+			null,
+			'GET'
+		);
+		if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) >= 300 ) {
+			return null;
+		}
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! is_array( $body ) || empty( $body['status'] ) ) {
+			return null;
+		}
+		return (string) $body['status'];
+	}
+
+	/**
+	 * Add "Notify PayPossible: shipped/cancel" entries to the Order Actions
+	 * dropdown on the order edit screen. Only shown for PayPossible orders
+	 * that have a PayPossible order id and haven't yet had a successful
+	 * notification for the given action.
+	 *
+	 * @param array $actions Existing actions.
+	 * @return array
+	 */
+	public function add_order_actions( $actions ) {
+		global $theorder;
+		if ( ! $theorder || 'paypossible' !== $theorder->get_payment_method() ) {
+			return $actions;
+		}
+		if ( '' === (string) $theorder->get_meta( '_paypossible_order_id' ) ) {
+			return $actions;
+		}
+		if ( 'yes' !== (string) $theorder->get_meta( '_paypossible_shipped_notified' ) ) {
+			$actions['paypossible_notify_shipped'] = __( 'Notify PayPossible: shipped', 'woocommerce-gateway-paypossible' );
+		}
+		if ( 'yes' !== (string) $theorder->get_meta( '_paypossible_cancelled_notified' ) ) {
+			$actions['paypossible_notify_cancelled'] = __( 'Notify PayPossible: cancel order', 'woocommerce-gateway-paypossible' );
+		}
+		return $actions;
+	}
+
+	/**
+	 * Order Actions dropdown handler for the shipped notification.
+	 *
+	 * @param WC_Order $order The order the action was invoked on.
+	 */
+	public function run_notify_shipped_action( $order ) {
+		$result = $this->notify_shipped( $order->get_id() );
+		$this->store_admin_notice( $order->get_id(), $result, 'shipped' );
+	}
+
+	/**
+	 * Order Actions dropdown handler for the cancel notification.
+	 *
+	 * @param WC_Order $order The order the action was invoked on.
+	 */
+	public function run_notify_cancelled_action( $order ) {
+		$result = $this->notify_cancelled( $order->get_id() );
+		$this->store_admin_notice( $order->get_id(), $result, 'cancelled' );
+	}
+
+	/**
+	 * Store the outcome of an Order Actions notification in a transient so
+	 * render_admin_notice() can surface it on the resulting order edit page.
+	 *
+	 * @param int             $order_id The WooCommerce order id.
+	 * @param true|WP_Error   $result   Result from a notify_* call.
+	 * @param string          $action   Human-readable action name for the message.
+	 */
+	private function store_admin_notice( $order_id, $result, $action ) {
+		$key = 'paypossible_action_' . $order_id;
+		if ( is_wp_error( $result ) ) {
+			set_transient(
+				$key,
+				array(
+					'type'    => 'error',
+					'message' => sprintf( 'PayPossible %s failed: %s', $action, $result->get_error_message() ),
+				),
+				60
+			);
+		} else {
+			set_transient(
+				$key,
+				array(
+					'type'    => 'success',
+					'message' => sprintf( 'PayPossible %s notification sent.', $action ),
+				),
+				60
+			);
+		}
+	}
+
+	/**
+	 * Render any pending admin notice for the current order on the order
+	 * edit screen. Tolerates both legacy CPT and HPOS order screens.
+	 */
+	public function render_admin_notice() {
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		if ( ! $screen ) {
+			return;
+		}
+		if ( 'shop_order' !== $screen->id && 'woocommerce_page_wc-orders' !== $screen->id ) {
+			return;
+		}
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended
+		$order_id = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : ( isset( $_GET['id'] ) ? absint( $_GET['id'] ) : 0 );
+		// phpcs:enable
+		if ( ! $order_id ) {
+			return;
+		}
+		$key    = 'paypossible_action_' . $order_id;
+		$notice = get_transient( $key );
+		if ( ! $notice ) {
+			return;
+		}
+		delete_transient( $key );
+		$class = 'error' === $notice['type'] ? 'notice-error' : 'notice-success';
+		printf(
+			'<div class="notice %s is-dismissible"><p>%s</p></div>',
+			esc_attr( $class ),
+			esc_html( $notice['message'] )
+		);
 	}
 
 	/**
