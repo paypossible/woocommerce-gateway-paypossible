@@ -137,10 +137,11 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 		foreach ( $order->get_items() as $item_id => $item ) {
 			$product      = $item->get_product();
 			$cart_items[] = array(
-				'description' => $product->get_name(),
-				'sku'         => $product->get_sku(),
-				'price'       => $product->get_price( 'edit' ),
-				'quantity'    => $item->get_quantity(),
+				'reference_id' => $item_id,
+				'description'  => $product->get_name(),
+				'sku'          => $product->get_sku(),
+				'price'        => $product->get_price( 'edit' ),
+				'quantity'     => $item->get_quantity(),
 			);
 		}
 		$discount_total = number_format( $order->get_total_discount(), 2, '.', '' );

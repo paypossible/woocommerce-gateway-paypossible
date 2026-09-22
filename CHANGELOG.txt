@@ -1,4 +1,15 @@
 *** WooCommerce PayPossible Gateway Changelog ***
 
+2026-09-22 - version 1.1.0
+* Send the WooCommerce order-item id as reference_id on each PayPossible cart item.
+* Callback endpoint now handles PayPossible lifecycle JSON events and maps order statuses onto WooCommerce statuses.
+* Notify PayPossible on merchant fulfillment via woocommerce_order_status_completed and woocommerce_fulfillment_after_fulfill.
+* Notify PayPossible on merchant-initiated refund and cancel.
+* Inbound and outbound lifecycle notifications are idempotent.
+* Callback nonce is now generated with random_bytes, read from $_GET, and compared with hash_equals.
+* Fix: store callback nonce and lead id as WC order meta instead of order-item meta.
+* Fix: eliminate double stock reduction on payment completion.
+* Fix: typo in checkout error message.
+
 2024-05-27 - version 1.0.0
 * Initial release
