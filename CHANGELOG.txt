@@ -1,5 +1,10 @@
 *** WooCommerce PayPossible Gateway Changelog ***
 
+2026-09-24 - version 1.1.1
+* Fix: process_payment() no longer returns null on failure paths. WooCommerce Blocks (StoreApi/Legacy.php) calls array_merge() on the return value and would crash with a fatal TypeError under PHP 8+. Each failure path now returns array( 'result' => 'failure', 'message' => ... ) so both classic and Blocks checkouts render the error inline.
+* Cart-create and lead-create failures now log endpoint, HTTP response code, and response body via wc_get_logger() (WooCommerce -> Status -> Logs, source: paypossible). The API token is never logged.
+* Bumped the timeout on the cart and lead POSTs from WordPress's 5-second default to 10 seconds, matching the outbound helper.
+
 2026-09-22 - version 1.1.0
 
 Callback / lifecycle handling

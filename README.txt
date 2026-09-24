@@ -8,7 +8,7 @@ Requires at least: 4.0
 
 Tested up to: 6.6
 
-Stable tag: 1.1.0
+Stable tag: 1.1.1
 
 License: MIT
 
@@ -94,6 +94,11 @@ An order note describes the failure. For ship/cancel, a retry entry appears in t
 
 == Changelog ==
 
+= 1.1.1 =
+* Fix: process_payment() no longer returns null on failure paths. WooCommerce Blocks calls array_merge() on the return value and would crash with a fatal TypeError under PHP 8+. Each failure path now returns array( 'result' => 'failure', 'message' => ... ) so both classic and Blocks checkouts render the error inline.
+* Cart-create and lead-create failures now log endpoint, HTTP response code, and response body via wc_get_logger() (WooCommerce > Status > Logs, source: paypossible). The API token is never logged.
+* Bumped the timeout on the cart and lead POSTs from 5 seconds to 10 seconds.
+
 = 1.1.0 =
 
 Callback / lifecycle handling
@@ -126,6 +131,9 @@ Fixes
 * Initial release
 
 == Upgrade Notice ==
+
+= 1.1.1 =
+Fixes a fatal error in the WooCommerce Blocks checkout when a PayPossible API call fails, and adds diagnostic logging for those failures.
 
 = 1.1.0 =
 Adds full PayPossible lifecycle handling, first-class WC refund / ship / cancel integration, remote-authoritative idempotency, and several correctness and security fixes.

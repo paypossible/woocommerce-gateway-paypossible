@@ -7,7 +7,7 @@
  * Plugin Name: WooCommerce PayPossible Gateway
  * Plugin URI: https://github.com/paypossible/woocommerce-gateway-paypossible
  * Description: WooCommerce payment gateway for PayPossible.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: PayPossible, Inc.
  * Author URI: https://paypossible.com
  * Requires Plugins: woocommerce

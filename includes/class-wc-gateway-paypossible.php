@@ -166,27 +166,39 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			)
 		);
 
-		$response = wp_remote_post(
-			'https://' . $this->domain . '/api/v1/carts/',
+		$cart_endpoint = 'https://' . $this->domain . '/api/v1/carts/';
+		$response      = wp_remote_post(
+			$cart_endpoint,
 			array(
 				'body'    => $request_data,
 				'headers' => array(
 					'Content-Type' => 'application/json',
 				),
+				'timeout' => 10,
 			)
 		);
 
 		if ( is_wp_error( $response ) ) {
-			wc_add_notice( __( 'There was an error transferring cart. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
-			return;
+			$this->log_api_failure( 'cart_create', $cart_endpoint, $response );
+			$message = __( 'There was an error transferring cart. Please try again.', 'woocommerce-gateway-paypossible' );
+			wc_add_notice( $message, 'error' );
+			return array(
+				'result'  => 'failure',
+				'message' => $message,
+			);
 		}
 
 		$response_body = wp_remote_retrieve_body( $response );
 		$response_data = json_decode( $response_body, true );
 
 		if ( ! isset( $response_data['url'] ) ) {
-			wc_add_notice( __( 'There was an error transferring cart. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
-			return;
+			$this->log_api_failure( 'cart_create', $cart_endpoint, $response );
+			$message = __( 'There was an error transferring cart. Please try again.', 'woocommerce-gateway-paypossible' );
+			wc_add_notice( $message, 'error' );
+			return array(
+				'result'  => 'failure',
+				'message' => $message,
+			);
 		}
 
 		$cart_url = $response_data['url'];
@@ -222,28 +234,40 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			)
 		);
 
-		$response = wp_remote_post(
-			'https://' . $this->domain . '/api/v1/leads/',
+		$lead_endpoint = 'https://' . $this->domain . '/api/v1/leads/';
+		$response      = wp_remote_post(
+			$lead_endpoint,
 			array(
 				'body'    => $request_data,
 				'headers' => array(
 					'Content-Type'  => 'application/json',
 					'Authorization' => 'Token ' . $this->token,
 				),
+				'timeout' => 10,
 			)
 		);
 
 		if ( is_wp_error( $response ) ) {
-			wc_add_notice( __( 'There was an error starting application. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
-			return;
+			$this->log_api_failure( 'lead_create', $lead_endpoint, $response );
+			$message = __( 'There was an error starting application. Please try again.', 'woocommerce-gateway-paypossible' );
+			wc_add_notice( $message, 'error' );
+			return array(
+				'result'  => 'failure',
+				'message' => $message,
+			);
 		}
 
 		$response_body = wp_remote_retrieve_body( $response );
 		$response_data = json_decode( $response_body, true );
 
 		if ( ! isset( $response_data['app_url'] ) ) {
-			wc_add_notice( __( 'There was an error starting application. Please try again.', 'woocommerce-gateway-paypossible' ), 'error' );
-			return;
+			$this->log_api_failure( 'lead_create', $lead_endpoint, $response );
+			$message = __( 'There was an error starting application. Please try again.', 'woocommerce-gateway-paypossible' );
+			wc_add_notice( $message, 'error' );
+			return array(
+				'result'  => 'failure',
+				'message' => $message,
+			);
 		}
 
 		$app_url = $response_data['app_url'];
@@ -695,6 +719,37 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			esc_attr( $class ),
 			esc_html( $notice['message'] )
 		);
+	}
+
+	/**
+	 * Log an API failure via the WC logger. Includes the endpoint, HTTP
+	 * status code, and response body (or WP_Error details for network
+	 * failures). Never logs the outgoing request body or headers, so the
+	 * API token stays out of the log.
+	 *
+	 * @param string         $stage    Short label for where the failure occurred.
+	 * @param string         $endpoint The full URL we tried to hit.
+	 * @param array|WP_Error $response The wp_remote_* result.
+	 */
+	private function log_api_failure( $stage, $endpoint, $response ) {
+		if ( is_wp_error( $response ) ) {
+			$detail = array(
+				'stage'    => $stage,
+				'endpoint' => $endpoint,
+				'wp_error' => $response->get_error_code(),
+				'message'  => $response->get_error_message(),
+			);
+		} else {
+			$detail = array(
+				'stage'     => $stage,
+				'endpoint'  => $endpoint,
+				'http_code' => (int) wp_remote_retrieve_response_code( $response ),
+				'response'  => wp_remote_retrieve_body( $response ),
+			);
+		}
+		if ( function_exists( 'wc_get_logger' ) ) {
+			wc_get_logger()->error( wp_json_encode( $detail ), array( 'source' => 'paypossible' ) );
+		}
 	}
 
 	/**
