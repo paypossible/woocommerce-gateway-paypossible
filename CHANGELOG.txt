@@ -1,5 +1,11 @@
 *** WooCommerce PayPossible Gateway Changelog ***
 
+2026-11-09 - version 1.2.0
+* Resume an existing PayPossible application instead of starting a new one. When process_payment() runs on an order that already has a PayPossible lead (e.g. the customer was approved, left before signing, and returns via My Account -> Orders -> Pay), the plugin GETs the lead. If it has a loan in "approved" or "customer" status and the lead's PayPossible cart still matches the order (order reference_id, tax, shipping, discount, and items by sku/price/quantity), the customer is redirected back to the original application. Previously every retry created a second application, which only saw the customer's remaining open-to-buy.
+* If the lead or cart lookup fails (network error or 5xx), checkout shows "There was an error checking your existing application. Please try again." instead of creating a duplicate application. Lookup failures are logged via wc_get_logger() (source: paypossible, stage: lead_lookup / cart_lookup).
+* The callback nonce is now generated once per order and reused when a new lead is created on retry, so webhooks from the original application keep authenticating instead of being rejected with HTTP 400.
+* Regenerated the .pot file. It had not been updated since 1.0.0 and was missing strings added in 1.1.x.
+
 2026-09-24 - version 1.1.1
 * Fix: process_payment() no longer returns null on failure paths. WooCommerce Blocks (StoreApi/Legacy.php) calls array_merge() on the return value and would crash with a fatal TypeError under PHP 8+. Each failure path now returns array( 'result' => 'failure', 'message' => ... ) so both classic and Blocks checkouts render the error inline.
 * Cart-create and lead-create failures now log endpoint, HTTP response code, and response body via wc_get_logger() (WooCommerce -> Status -> Logs, source: paypossible). The API token is never logged.

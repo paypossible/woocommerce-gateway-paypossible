@@ -8,7 +8,7 @@ Requires at least: 4.0
 
 Tested up to: 6.6
 
-Stable tag: 1.1.1
+Stable tag: 1.2.0
 
 License: MIT
 
@@ -92,7 +92,17 @@ Yes.
 
 An order note describes the failure. For ship/cancel, a retry entry appears in the order's Actions dropdown. For refunds, the failure blocks the WC refund modal and shows the error inline — the merchant can retry or click "Refund manually" to record a local refund without touching PayPossible.
 
+= What if a customer is approved but leaves before finishing? =
+
+When they come back to pay for the same order (for example via My Account → Orders → Pay), the plugin checks PayPossible for their existing application. If it is still open and the order hasn't changed, they are sent back to that application instead of starting a new one. If the order has changed, a new application is started.
+
 == Changelog ==
+
+= 1.2.0 =
+* Resume an existing PayPossible application instead of starting a new one. When a customer retries payment on an order that already has a PayPossible lead with an "approved" or "customer" loan, and the lead's PayPossible cart still matches the order, they are redirected back to the original application. Previously every retry created a second application, which only saw the customer's remaining open-to-buy.
+* If PayPossible can't be reached to check for an existing application, checkout shows an error and asks the customer to try again instead of creating a duplicate application. Failures are logged (WooCommerce > Status > Logs, source: paypossible).
+* The callback nonce is now generated once per order and reused on retries, so webhooks from the original application keep working.
+* Regenerated the translation template (.pot).
 
 = 1.1.1 =
 * Fix: process_payment() no longer returns null on failure paths. WooCommerce Blocks calls array_merge() on the return value and would crash with a fatal TypeError under PHP 8+. Each failure path now returns array( 'result' => 'failure', 'message' => ... ) so both classic and Blocks checkouts render the error inline.
@@ -131,6 +141,9 @@ Fixes
 * Initial release
 
 == Upgrade Notice ==
+
+= 1.2.0 =
+Customers who return to pay for an order are sent back to their existing PayPossible application instead of starting a new one.
 
 = 1.1.1 =
 Fixes a fatal error in the WooCommerce Blocks checkout when a PayPossible API call fails, and adds diagnostic logging for those failures.
