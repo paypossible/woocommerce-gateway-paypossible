@@ -141,30 +141,24 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	public function process_payment( $order_id ) {
 		$order = wc_get_order( $order_id );
 
-		$cart_items = array();
-		foreach ( $order->get_items() as $item_id => $item ) {
-			$product      = $item->get_product();
-			$cart_items[] = array(
-				'reference_id' => $item_id,
-				'description'  => $product->get_name(),
-				'sku'          => $product->get_sku(),
-				'price'        => $product->get_price( 'edit' ),
-				'quantity'     => $item->get_quantity(),
+		$resume_url = $this->get_resumable_app_url( $order );
+		if ( is_wp_error( $resume_url ) ) {
+			$message = __( 'There was an error checking your existing application. Please try again.', 'woocommerce-gateway-paypossible' );
+			wc_add_notice( $message, 'error' );
+			return array(
+				'result'  => 'failure',
+				'message' => $message,
 			);
 		}
-		$discount_total = number_format( $order->get_total_discount(), 2, '.', '' );
-		$shipping_total = number_format( $order->get_total_shipping(), 2, '.', '' );
-		$tax_total      = number_format( $order->get_total_tax(), 2, '.', '' );
+		if ( null !== $resume_url ) {
+			$order->update_status( 'pending', __( 'Resuming existing customer application.', 'woocommerce-gateway-paypossible' ) );
+			return array(
+				'result'   => 'success',
+				'redirect' => $resume_url,
+			);
+		}
 
-		$request_data = wp_json_encode(
-			array(
-				'discount'     => $discount_total,
-				'items'        => $cart_items,
-				'reference_id' => $order->get_id(),
-				'shipping'     => $shipping_total,
-				'tax'          => $tax_total,
-			)
-		);
+		$request_data = wp_json_encode( $this->build_cart_payload( $order ) );
 
 		$cart_endpoint = 'https://' . $this->domain . '/api/v1/carts/';
 		$response      = wp_remote_post(
@@ -211,8 +205,11 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			'zip'     => $order->get_billing_postcode(),
 		);
 		$merchant_url = 'https://' . $this->domain . '/api/v1/merchants/' . $this->merchant_id . '/';
-		$nonce        = bin2hex( random_bytes( 16 ) );
-		$personal     = array(
+		$nonce        = (string) $order->get_meta( '_paypossible_callback_nonce' );
+		if ( '' === $nonce ) {
+			$nonce = bin2hex( random_bytes( 16 ) );
+		}
+		$personal = array(
 			'first_name' => $order->get_billing_first_name(),
 			'last_name'  => $order->get_billing_last_name(),
 			'email'      => $order->get_billing_email(),
@@ -281,6 +278,147 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 			'result'   => 'success',
 			'redirect' => $app_url,
 		);
+	}
+
+	/**
+	 * Build the PayPossible cart payload for an order.
+	 *
+	 * @param WC_Order $order The WooCommerce order.
+	 * @return array
+	 */
+	private function build_cart_payload( $order ) {
+		$cart_items = array();
+		foreach ( $order->get_items() as $item_id => $item ) {
+			$product      = $item->get_product();
+			$cart_items[] = array(
+				'reference_id' => $item_id,
+				'description'  => $product->get_name(),
+				'sku'          => $product->get_sku(),
+				'price'        => $product->get_price( 'edit' ),
+				'quantity'     => $item->get_quantity(),
+			);
+		}
+
+		return array(
+			'discount'     => number_format( $order->get_total_discount(), 2, '.', '' ),
+			'items'        => $cart_items,
+			'reference_id' => $order->get_id(),
+			'shipping'     => number_format( $order->get_total_shipping(), 2, '.', '' ),
+			'tax'          => number_format( $order->get_total_tax(), 2, '.', '' ),
+		);
+	}
+
+	/**
+	 * Reduce a cart (our payload or PayPossible's GET response) to the fields
+	 * that identify its contents, in a canonical form for comparison.
+	 *
+	 * Item reference_id is left out because classic checkout recreates line
+	 * items (new ids) when it resumes an order. Description is left out so a
+	 * product rename doesn't force a new application.
+	 *
+	 * @param array $cart Cart with reference_id, tax, shipping, discount, items.
+	 * @return array
+	 */
+	private function normalize_cart( $cart ) {
+		$items = array();
+		foreach ( (array) ( isset( $cart['items'] ) ? $cart['items'] : array() ) as $item ) {
+			$items[] = implode(
+				'|',
+				array(
+					isset( $item['sku'] ) ? (string) $item['sku'] : '',
+					number_format( isset( $item['price'] ) ? (float) $item['price'] : 0, 2, '.', '' ),
+					isset( $item['quantity'] ) ? (int) $item['quantity'] : 0,
+				)
+			);
+		}
+		sort( $items );
+
+		return array(
+			'reference_id' => isset( $cart['reference_id'] ) ? (string) $cart['reference_id'] : '',
+			'tax'          => number_format( isset( $cart['tax'] ) ? (float) $cart['tax'] : 0, 2, '.', '' ),
+			'shipping'     => number_format( isset( $cart['shipping'] ) ? (float) $cart['shipping'] : 0, 2, '.', '' ),
+			'discount'     => number_format( isset( $cart['discount'] ) ? (float) $cart['discount'] : 0, 2, '.', '' ),
+			'items'        => $items,
+		);
+	}
+
+	/**
+	 * Look up the order's existing PayPossible lead and return its app_url if
+	 * the customer has an unfinished (approved or customer) loan and the lead's cart still matches
+	 * the order.
+	 *
+	 * WC only re-runs process_payment() on the same order when the cart hash
+	 * is unchanged or via the order-pay page. The cart comparison covers
+	 * merchant edits to a pending order in the admin.
+	 *
+	 * @param WC_Order $order The WooCommerce order.
+	 * @return string|null|WP_Error The app_url to resume, null if there is
+	 *                              nothing to resume, WP_Error if the lookup
+	 *                              failed and checkout should not continue.
+	 */
+	private function get_resumable_app_url( $order ) {
+		$lead_id = (string) $order->get_meta( '_paypossible_lead_id' );
+		if ( '' === $lead_id ) {
+			return null;
+		}
+
+		$path     = '/api/v1/leads/' . rawurlencode( $lead_id ) . '/';
+		$endpoint = 'https://' . $this->domain . $path;
+		$response = $this->send_paypossible_request( $path, null, 'GET' );
+
+		if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) >= 500 ) {
+			$this->log_api_failure( 'lead_lookup', $endpoint, $response );
+			return new WP_Error( 'lead_lookup_failed', __( 'Could not read PayPossible lead.', 'woocommerce-gateway-paypossible' ) );
+		}
+		if ( wp_remote_retrieve_response_code( $response ) >= 300 ) {
+			$this->log_api_failure( 'lead_lookup', $endpoint, $response );
+			return null;
+		}
+
+		$lead = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! is_array( $lead ) || empty( $lead['app_url'] ) || ! isset( $lead['loans'] ) || ! is_array( $lead['loans'] ) ) {
+			return null;
+		}
+
+		$has_unfinished_loan = false;
+		foreach ( $lead['loans'] as $loan ) {
+			if ( is_array( $loan ) && isset( $loan['status'] ) && in_array( $loan['status'], array( 'approved', 'customer' ), true ) ) {
+				$has_unfinished_loan = true;
+				break;
+			}
+		}
+		if ( ! $has_unfinished_loan ) {
+			return null;
+		}
+
+		// The cart endpoint requires our token, so only follow a cart URL on our own domain.
+		$cart_url = isset( $lead['cart']['url'] ) ? (string) $lead['cart']['url'] : '';
+		if ( '' === $cart_url || wp_parse_url( $cart_url, PHP_URL_HOST ) !== $this->domain ) {
+			return null;
+		}
+
+		$cart_path = (string) wp_parse_url( $cart_url, PHP_URL_PATH );
+		$response  = $this->send_paypossible_request( $cart_path, null, 'GET' );
+
+		if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) >= 500 ) {
+			$this->log_api_failure( 'cart_lookup', $cart_url, $response );
+			return new WP_Error( 'cart_lookup_failed', __( 'Could not read PayPossible cart.', 'woocommerce-gateway-paypossible' ) );
+		}
+		if ( wp_remote_retrieve_response_code( $response ) >= 300 ) {
+			$this->log_api_failure( 'cart_lookup', $cart_url, $response );
+			return null;
+		}
+
+		$remote_cart = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! is_array( $remote_cart ) ) {
+			return null;
+		}
+
+		if ( $this->normalize_cart( $remote_cart ) !== $this->normalize_cart( $this->build_cart_payload( $order ) ) ) {
+			return null;
+		}
+
+		return (string) $lead['app_url'];
 	}
 
 	/**
@@ -662,9 +800,9 @@ class WC_Gateway_PayPossible extends WC_Payment_Gateway {
 	 * Store the outcome of an Order Actions notification in a transient so
 	 * render_admin_notice() can surface it on the resulting order edit page.
 	 *
-	 * @param int             $order_id The WooCommerce order id.
-	 * @param true|WP_Error   $result   Result from a notify_* call.
-	 * @param string          $action   Human-readable action name for the message.
+	 * @param int           $order_id The WooCommerce order id.
+	 * @param true|WP_Error $result   Result from a notify_* call.
+	 * @param string        $action   Human-readable action name for the message.
 	 */
 	private function store_admin_notice( $order_id, $result, $action ) {
 		$key = 'paypossible_action_' . $order_id;
